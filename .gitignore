@@ -1,0 +1,6 @@
+dataset/*
+*__pycache__
+plots/*
+MaxSAT_Dataset/*
+src/*.csv
+solver_output/*
