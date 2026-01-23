@@ -5,6 +5,7 @@ import random
 import numpy as np
 import atexit
 import torch
+import threading
 
 # Import solvers
 from solver.solver_wrapper import (
@@ -15,13 +16,15 @@ from solver.solver_wrapper import (
     SATLikeSolver,
     FourierSATSolver,
     SPBSolver,
+    LMSolver,
+    ModelPredictionSolver,
 )
 from solver.gnn_solver import LSGNNSolver
 
 def parse_args():
     parser = argparse.ArgumentParser(description="General Solver Launcher")
     parser.add_argument("--solver", type=str, required=True,
-                        choices=["sgat", "nuwls", "mixing", "mixsat", "bandhs", "satlike3.0", "fouriersat", "spb"],
+                        choices=["sgat", "nuwls", "mixing", "mixsat", "bandhs", "satlike3.0", "fouriersat", "spb", "lm", "model-predict"],
                         help="Solver to use")
     parser.add_argument("--problem", type=str, required=True, help="Problem file path")
     parser.add_argument("--timeout", type=int, default=60, help="Timeout in seconds")
@@ -66,9 +69,74 @@ def main():
 
     result_entry = {"problem": problem_path, "cost": -1.0}
     placeholder_written = False
+    # If this is set to True we will NOT remove the placeholder in the atexit cleanup.
+    # This is used when the process exits due to a CUDA OOM so the placeholder remains
+    # for later inspection / rerun.
+    keep_placeholder_on_oom = False
+
+    # Register an exception hook so that if an uncaught exception (including
+    # CUDA OOM) terminates the process, we can mark the placeholder to be
+    # kept instead of being removed by atexit cleanup. We also wrap
+    # threading.excepthook when available to catch uncaught exceptions in
+    # threads.
+    original_excepthook = sys.excepthook
+
+    def _mark_oom_from_exception(exc_type, exc_value):
+        # Helper that inspects an exception and sets the keep flag when it
+        # appears to be a CUDA out-of-memory error.
+        nonlocal keep_placeholder_on_oom
+        try:
+            import torch as _torch
+            oom_type = getattr(_torch.cuda, 'OutOfMemoryError', None)
+            if oom_type is not None and issubclass(exc_type, oom_type):
+                keep_placeholder_on_oom = True
+                return True
+        except Exception:
+            pass
+        try:
+            if exc_value is not None and 'out of memory' in str(exc_value).lower():
+                keep_placeholder_on_oom = True
+                return True
+        except Exception:
+            pass
+        return False
+
+    def exception_hook(exc_type, exc_value, exc_tb):
+        # Called for uncaught exceptions in the main thread.
+        try:
+            if _mark_oom_from_exception(exc_type, exc_value):
+                print("Uncaught exception detected as CUDA OOM; keeping placeholder.")
+        except Exception:
+            pass
+        try:
+            original_excepthook(exc_type, exc_value, exc_tb)
+        except Exception:
+            # Be defensive: don't let the hook raise.
+            pass
+
+    sys.excepthook = exception_hook
+
+    # If available, wrap threading.excepthook (Python 3.8+) to catch OOMs in
+    # worker threads as well.
+    if hasattr(threading, 'excepthook'):
+        original_thread_excepthook = threading.excepthook
+
+        def thread_excepthook(args):
+            try:
+                _mark_oom_from_exception(args.exc_type, args.exc_value)
+            except Exception:
+                pass
+            try:
+                original_thread_excepthook(args)
+            except Exception:
+                pass
+
+        threading.excepthook = thread_excepthook
 
     def cleanup_placeholder():
-        if placeholder_written and args.save_cost_path and os.path.exists(args.save_cost_path):
+        # Only remove the placeholder on premature exit if we are NOT explicitly
+        # keeping it (e.g. when a CUDA OOM occurred).
+        if placeholder_written and not keep_placeholder_on_oom and args.save_cost_path and os.path.exists(args.save_cost_path):
             import pandas as pd
             df = pd.read_csv(args.save_cost_path)
             df = df[df["problem"] != result_entry["problem"]]
@@ -81,8 +149,17 @@ def main():
     if args.save_cost_path and os.path.exists(args.save_cost_path):
         import pandas as pd
         existing_df = pd.read_csv(args.save_cost_path)
-        if problem_path in existing_df["problem"].values:
-            print(f"Problem {problem_path} already exists in {args.save_cost_path}. Skipping.")
+        # Skip if the exact problem path is present OR if any existing entry has
+        # the same filename (basename). This handles cases where the same file
+        # may be referenced via different paths but should be considered the
+        # same instance.
+        try:
+            existing_problems = existing_df["problem"].dropna().astype(str).tolist()
+        except Exception:
+            existing_problems = []
+        existing_basenames = {os.path.basename(p) for p in existing_problems}
+        if problem_path in existing_problems or os.path.basename(problem_path) in existing_basenames:
+            print(f"Problem {problem_path} already exists in {args.save_cost_path} (matched by path or filename). Skipping.")
             return
 
     # Write placeholder result if save_cost_path is provided
@@ -93,7 +170,10 @@ def main():
             df = pd.read_csv(args.save_cost_path)
         else:
             df = pd.DataFrame(columns=["problem", "cost"])
-        df = pd.concat([df, pd.DataFrame([result_entry])], ignore_index=True)
+        for key in result_entry.keys():
+            if key not in df.columns:
+                df[key] = np.nan
+        df.loc[len(df)] = {col: result_entry.get(col, np.nan) for col in df.columns}
         df.to_csv(args.save_cost_path, index=False)
         placeholder_written = True
 
@@ -114,6 +194,12 @@ def main():
             "satlike3.0": SATLikeSolver,
             "fouriersat": FourierSATSolver,
             "spb": SPBSolver,
+            "lm": LMSolver,
+            "model-predict": lambda: ModelPredictionSolver(
+                model_dir=args.model_dir,
+                model_id=args.model_id,
+                device=device,
+            ),
         }
 
         if args.solver == "sgat":
@@ -173,8 +259,38 @@ def main():
                     solver_dir=solver_dir,
                 )
         except Exception as e:
-            print(f"Error running solver: {e}")
-            cost = -1
+            # Detect CUDA out-of-memory errors. There are a few different ways
+            # these can present (specific exception types or generic RuntimeError
+            # messages containing 'out of memory'). If we hit an OOM we want to
+            # exit early but leave the placeholder row in the save CSV for
+            # later inspection or rerun.
+            is_oom = False
+            try:
+                import torch as _torch
+                # torch.cuda.OutOfMemoryError may be available on some PyTorch versions
+                oom_type = getattr(_torch.cuda, 'OutOfMemoryError', None)
+                if oom_type is not None and isinstance(e, oom_type):
+                    is_oom = True
+            except Exception:
+                pass
+
+            if not is_oom:
+                # Fallback: look for 'out of memory' in the message text
+                try:
+                    if 'out of memory' in str(e).lower():
+                        is_oom = True
+                except Exception:
+                    pass
+
+            if is_oom:
+                print("CUDA out of memory detected while running the solver. Leaving placeholder intact and exiting.")
+                # Prevent the atexit cleanup from removing the placeholder.
+                keep_placeholder_on_oom = True
+                # Exit; atexit will run but cleanup_placeholder will skip removal.
+                sys.exit(1)
+            else:
+                print(f"Error running solver: {e}")
+                cost = -1
     
     print(f"Result: {cost}")
     if args.save_cost_path:

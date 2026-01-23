@@ -14,7 +14,6 @@ class SGATLoss(nn.Module):
         super().__init__()
         self.device = device
         self.loss_func = loss_type(reduction="none")
-        self.eps = 1e-8
 
     def forward(self, output: list[torch.Tensor], data) -> torch.Tensor:
         """
@@ -36,7 +35,7 @@ class SGATLoss(nn.Module):
 
         weights = data.weights.to(loss_elem.device)
         weighted_sum = scatter(loss_elem * weights, batch_clause, dim=0, dim_size=data.num_graphs, reduce="sum")
-        weight_total = scatter(weights, batch_clause, dim=0, dim_size=data.num_graphs, reduce="sum").clamp_min(self.eps)
+        weight_total = scatter(weights, batch_clause, dim=0, dim_size=data.num_graphs, reduce="sum")
         return weighted_sum / weight_total
 
     def evaluation(self, output: list[torch.Tensor], data) -> torch.Tensor:
@@ -56,7 +55,7 @@ class SGATLoss(nn.Module):
         weights = data.weights.to(out_clause.device)
 
         weighted_sat = scatter(out_clause * weights, batch, dim=0, dim_size=data.num_graphs, reduce="sum")
-        weight_total = scatter(weights, batch, dim=0, dim_size=data.num_graphs, reduce="sum").clamp_min(self.eps)
+        weight_total = scatter(weights, batch, dim=0, dim_size=data.num_graphs, reduce="sum")
 
         graph_scores = weighted_sat / weight_total
         return graph_scores.mean()

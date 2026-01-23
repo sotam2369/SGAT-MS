@@ -20,6 +20,7 @@ def getArgs():
     parser.add_argument("--show-all", action="store_true", help="Show all years in one plot")
     parser.add_argument("--show-error", action="store_true", help="Show error in the latex table")
     parser.add_argument("--add-unfound", action="store_true", help="Add unfound to the scores")
+    parser.add_argument("--no-latex", action="store_true", help="Skip LaTeX table output")
     return parser.parse_args()
 
 
@@ -34,45 +35,82 @@ class bcolors:
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
 
+def _load_csv_as_dict(path):
+    """
+    Load a CSV file and return an ordered mapping of problem -> cost.
+    Handles simple two-column layouts as well as older formats by filtering
+    out rows that do not look like problem entries.
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Results file not found: {path}")
+
+    with open(path, newline='') as f:
+        rows = list(csv.reader(f))
+
+    if not rows:
+        return {}
+
+    # Skip header row if present
+    start_idx = 0
+    header = [cell.lower() for cell in rows[0]]
+    if "problem" in header:
+        start_idx = 1
+
+    results = {}
+    for row in rows[start_idx:]:
+        if not row or len(row) < 2:
+            continue
+        problem = row[0]
+        if not problem or problem.lower() == "problem":
+            continue
+        # Heuristic: keep rows that look like instance paths/names
+        if ".wcnf" not in problem:
+            continue
+        cost = row[1] if len(row) > 1 and row[1] != "" else "-1"
+        results[problem] = cost
+
+    return results
+
+
 def combine_results(dir, files, year, names, add_unfound=True):
-    csv_list = []
+    solver_dicts = []
+    problem_sets = []
+
     for file_single in files:
-        csv_list_temp = []
+        per_solver = []
         for file in file_single.split(","):
-            with open(os.path.join(dir, file.replace("year", year))) as f:
-                reader = csv.reader(f)
-                csv_list_temp.append(list(reader))
-        csv_list.append(csv_list_temp)
+            file_path = os.path.join(dir, file.replace("year", year))
+            result_dict = _load_csv_as_dict(file_path)
+            per_solver.append(result_dict)
+            problem_sets.append(set(result_dict.keys()))
+        solver_dicts.append(per_solver)
 
-    final_list_names = csv_list[0][0][-1]
-    removed = None
-    if not add_unfound and csv_list[0][0][0][-1] == '-1':
-        removed = final_list_names.pop(-1)
-    final_list_names = list(set(final_list_names))
+    if not problem_sets:
+        return [], []
 
-    for i in range(len(files)):
-        for j in range(len(csv_list[i])):
-            for key in csv_list[i][j][-1]:
-                if key not in final_list_names:
-                    final_list_names.append(key)
+    if add_unfound:
+        final_list_names = sorted(set().union(*problem_sets))
+    else:
+        intersect = set(problem_sets[0])
+        for s in problem_sets[1:]:
+            intersect &= s
+        final_list_names = sorted(intersect)
 
-    if not add_unfound and removed is not None:
-        print("Removing", removed)
-        final_list_names.append(removed)
-
-    final_csv_list = [[[] for _ in range(len(csv_list[i]))] for i in range(len(files))]
-    for i in range(len(files)):
-        for j in range(len(csv_list[i])):
-            for key in list(final_list_names):
-                if key in csv_list[i][j][-1]:
-                    final_csv_list[i][j].append(csv_list[i][j][0][csv_list[i][j][-1].index(key)])
+    final_csv_list = []
+    for solver_idx, solver_files in enumerate(solver_dicts):
+        solver_rows = []
+        for data_dict in solver_files:
+            row = []
+            for problem in final_list_names:
+                if problem in data_dict:
+                    row.append(data_dict[problem])
+                elif add_unfound:
+                    print(problem, "not in", names[solver_idx])
+                    row.append(-1)
                 else:
-                    if add_unfound:
-                        print(key, "not in", names[i])
-                        final_csv_list[i][j].append(-1)
-                    else:
-                        final_list_names.remove(key)
-
+                    row.append(-1)
+            solver_rows.append(row)
+        final_csv_list.append(solver_rows)
 
     return final_csv_list, final_list_names
 
@@ -105,7 +143,10 @@ def getScores(final_csv_list, final_list_names, year, best_cost_file, scores_all
                 for y in x:
                     if float(y[i]) > 0:
                         all_list.append(float(y[i]))
-            best_cost_dict[final_list_names[i]] = min(all_list)
+            if all_list:
+                best_cost_dict[final_list_names[i]] = min(all_list)
+            else:
+                best_cost_dict[final_list_names[i]] = float('inf')
             true_name = final_list_names[i]
         
         # Replace all numbers with N
@@ -408,18 +449,22 @@ if __name__ == "__main__":
         scores, scores_per_set, scores_all, scores_per_set_all  = getScores(final_csv_list, final_list_names, year, args.best_cost, scores_all, scores_per_set_all, remove_ones=args.remove_ones)
         scores, error, scores_per_set, _ = getMeanAndError(scores, scores_per_set)
         plotResults(scores, scores_per_set, year, output_dir, args.names, args.show_scores)
-        print(f"Year {year} done")
-        outputScores(scores, scores_per_set, year, args.names)
-        print()
+
+        if not args.no_latex:
+            print(f"Year {year} done")
+            outputScores(scores, scores_per_set, year, args.names)
+            print()
         scores_per_year[year] = scores
         errors_per_year[year] = np.mean(np.array(error), axis=1).tolist()
     
     scores_all, error_all, scores_per_set_all, _ = getMeanAndError(scores_all, scores_per_set_all)
     plotResults(scores_all, scores_per_set_all, "all", output_dir, args.names, args.show_scores, plt_scatter=not multi)
-    outputScores(scores_all, scores_per_set_all, "all", args.names)
+    if not args.no_latex:
+        outputScores(scores_all, scores_per_set_all, "all", args.names)
     if args.show_all:
         scores_per_year["all"] = scores_all
         errors_per_year["all"] = np.mean(np.array(error_all), axis=1).tolist()
     if not args.show_error:
         errors_per_year = None
-    outputLatexTable(scores_per_year, args.names, args.proposed_method, args.show_timeouts, error=errors_per_year)
+    if not args.no_latex:
+        outputLatexTable(scores_per_year, args.names, args.proposed_method, args.show_timeouts, error=errors_per_year)

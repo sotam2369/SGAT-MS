@@ -16,7 +16,6 @@ class SGATTrainer:
         cut_incomplete_batch: bool = False,
         learning_rate: float = None,
         randomize_input_prob: float = 0.1,
-        scheduler: optim.lr_scheduler._LRScheduler = None
     ):
         """
         Initialize the SGATTrainer with model, optimizer, data loaders, loss function, and training parameters.
@@ -30,7 +29,6 @@ class SGATTrainer:
         self.cut_incomplete_batch = cut_incomplete_batch
         self.learning_rate = learning_rate
         self.random_input = RandomInput(randomize_input_prob)
-        self.scheduler = scheduler
 
     def pre_training(self):
         """
@@ -40,10 +38,7 @@ class SGATTrainer:
         self.model.to(self.device)
 
         if self.learning_rate is not None:
-            self.optimizer = self.optimizer_cls(self.model.parameters(), lr=self.learning_rate, weight_decay=1e-5)
-
-            if self.scheduler is not None:
-                self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=100)
+            self.optimizer = self.optimizer_cls(self.model.parameters(), lr=self.learning_rate)
         else:
             self.optimizer = self.optimizer_cls(self.model.parameters())
 
@@ -108,14 +103,13 @@ class SGATTrainer:
 
             if compute_cost:
                 return_out = output[1].detach()
-                output[2].detach()
 
                 for i in range(batch_size):
                     out_list.append(return_out[data.batch[data.mask == 0] == i])
 
                 clause_mask = data.mask == 1
                 clause_batch = data.batch[clause_mask]
-                unsatisfied = torch.round(1 - output[2][clause_mask, 0])
+                unsatisfied = torch.round(1 - output[2][clause_mask, 0].detach())
                 cost_int = scatter(
                     unsatisfied * data.weights,
                     clause_batch,
@@ -125,9 +119,6 @@ class SGATTrainer:
                 )
 
                 cost_list.append(cost_int.detach())
-
-        if self.scheduler is not None:
-            self.scheduler.step()
 
         if total_loss is None:
             total_loss = torch.zeros((), device=self.device)

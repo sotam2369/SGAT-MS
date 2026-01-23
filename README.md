@@ -1,20 +1,13 @@
 # SGAT: A SAT-based Graph Attention Network
 
 Spotlight Poster – NeurIPS 2025  
-Poster: https://neurips.cc/virtual/2025/poster/116771
+Poster: https://neurips.cc/virtual/2025/loc/san-diego/poster/136213
 
-SGAT couples t-norm logic with graph attention to tackle weighted and unweighted MaxSAT through differentiable optimization. The model mirrors greedy distributed local search while remaining end-to-end trainable and GPU friendly.
 
-## Highlights
-- SAT-aware attention layers that inject clause satisfaction margins directly into message passing.
-- Unified training across MaxSAT Evaluation benchmarks from 2018 to 2024 with shared weighted/unweighted handling.
-- Baselines for classical GATs and solver wrappers, enabling direct comparisons and ablations.
-- Pretrained checkpoints and plotting utilities for fast inspection of loss and evaluation curves.
-
-## Poster and Paper
-- Title: **Graph-Based Attention for Differentiable MaxSAT Solving**
-- Spotlight presentation at NeurIPS 2025. Camera-ready preprint and supplementary material will be linked here when released.
-- Slides and additional poster assets will be added after the conference.
+## TL;DR
+- SGAT is a novel graph neural network architecture tailored for solving (Weighted) MaxSAT problems
+- SGAT layers perform distributed local search: (1) evaluates clause satisfaction with t-norms, and (2) updates variable assignments via graph attention.
+- Trains on (Weighted) MaxSAT benchmarks from recent competitions, achieving state-of-the-art results among continuous optimization based methods.
 
 ## Environment Setup
 - Python 3.10 or later is recommended.
@@ -62,14 +55,13 @@ bash script/tools/download_maxsat_data.sh
    ```
 
 Key flags in `src/main.py`:
-- `--t-norm`: choose among `godel`, `product`, `lukasiewicz`, `soft_godel`, or `einstein`.
+- `--t-norm`: choose among `godel`, `product`, or `lukasiewicz`.
 - `--use-gat`: swap SGAT layers for standard GATConv baselines.
 - `--best-weights`, `--output-epochs`, `--finish-round`: control checkpointing and early stop heuristics.
 
 ## Reproducing Spotlight Experiments
 - `script/experiments/experiment1.sh`: reproduces the SGAT vs. classical GAT comparison on MaxSAT 2018 subsets, including automated plotting.
 - `script/experiments/experiment2.sh`: extends ablations over t-norm choices, normalization, and dropout schedules.
-- Each script leverages the shared `run_allow_fail` helper so longer sweeps continue despite occasional timeouts.
 - Logs, checkpoints, and figures are stored in `plots/`, organized by model family and training ID.
 
 ## Evaluation and Analysis
@@ -96,7 +88,15 @@ Key flags in `src/main.py`:
 ```
 
 ## Citation
-If you use SGAT in your research, please cite the NeurIPS 2025 spotlight paper. A BibTeX entry will be provided alongside the camera-ready manuscript.
+```bibtex
+@inproceedings{moriyama2025graphbased,
+  title={Graph-Based Attention for Differentiable Max{SAT} Solving},
+  author={Sota Moriyama and Katsumi Inoue},
+  booktitle={The Thirty-ninth Annual Conference on Neural Information Processing Systems},
+  year={2025},
+  url={https://openreview.net/forum?id=g9XLUU3TaG}
+}
+```
 
 ## Contact
-Questions and feedback are welcome via the NeurIPS 2025 virtual poster page or the forthcoming project site.
+For any inquiries, please reach out to Sota Moriyama (sotam@nii.ac.jp), or open an issue on the GitHub repository.

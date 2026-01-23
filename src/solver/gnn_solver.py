@@ -5,7 +5,7 @@ import logging
 from typing import Optional, List, Tuple
 
 import torch
-from torch.utils.data import DataLoader
+from torch_geometric.loader import DataLoader
 
 from models import loadFromID
 from trainer import SGATTrainer
@@ -111,20 +111,17 @@ class LSGNNSolver:
             return True  # Indicates early stopping should occur
         return False
 
-    def _randomize_solution(self, solution: object, randomize_prob: float, final_best_values: torch.Tensor) -> None:
+    def _randomize_graph(self, graph: object, randomize_prob: float) -> None:
         """
         Randomize parts of the solution with given probability while keeping fixed variables as final best.
 
         Args:
             solution (object): Solution object with attributes x and mask.
             randomize_prob (float): Probability of randomizing each variable.
-            final_best_values (torch.Tensor): Final best solution values to keep fixed variables.
         """
-        random_mask = torch.rand_like(solution.x) <= randomize_prob
-        solution.x[random_mask] = torch.rand_like(solution.x[random_mask])
-        device = solution.x.device
-        variable_mask = solution.mask.to(device)
-        solution.x[variable_mask == 0] = final_best_values.to(device)
+        random_mask = torch.rand_like(graph.x) <= randomize_prob
+        graph.x[random_mask] = torch.rand_like(graph.x[random_mask])
+        return graph
 
     def _initialize_batch_state(self, batch_graphs: List[object], n_clauses: int) -> Tuple[List[dict], dict, List[int], List[int]]:
         """
@@ -145,7 +142,10 @@ class LSGNNSolver:
         for i in range(len(batch_graphs)):
             random_init = torch.rand_like(batch_graphs[i].x)
             batch_graphs[i].x = random_init
-            inf_out = SGATTrainer.get_cost(self, batch_graphs[i], detach=False) if not hasattr(self, 'trainer') else self.trainer.get_cost(batch_graphs[i], detach=False)
+            if hasattr(self, 'trainer'):
+                inf_out = self.trainer.get_cost(batch_graphs[i], use_weights=True, detach=False)
+            else:
+                inf_out = SGATTrainer.get_cost(self, batch_graphs[i], use_weights=True, detach=False)  # type: ignore[arg-type]
             current_best.append({
                 'epoch': 1,
                 'values': inf_out[1][1].detach().cpu() if hasattr(inf_out[1][1], "detach") else inf_out[1][1],
@@ -182,9 +182,10 @@ class LSGNNSolver:
         if updated[instance_idx] == len(self.RANDOMIZE_PROBS):
             updated[instance_idx] = 0
             current_best[instance_idx]['early_stop'] = self.DEFAULT_PATIENCE
-            batch_graphs[instance_idx].x[batch_graphs[instance_idx].mask == 0] = final_best['values'].to(batch_graphs[instance_idx].x.device)
-        self._randomize_solution(batch_graphs[instance_idx], self.RANDOMIZE_PROBS[updated[instance_idx]], final_best['values'])
-        current_best[instance_idx]['cost'] = n_clauses
+
+        batch_graphs[instance_idx] = self._randomize_graph(batch_graphs[instance_idx], self.RANDOMIZE_PROBS[updated[instance_idx]])
+        self.trainer.train_loader = DataLoader(batch_graphs, batch_size=len(batch_graphs), shuffle=False)
+        current_best[instance_idx]['cost'] = self.sum_weights + 1
         updated[instance_idx] += 1
         # Reset epoch count for this instance
         # Note: epoch is incremented in main loop after this call
@@ -201,6 +202,8 @@ class LSGNNSolver:
         Returns:
             int: The cost of the best solution found.
         """
+        time_start = time.perf_counter()
+        
         # Prepare data using SGATData
         cnf_data = SGATData(
             file_path=problem_file,
@@ -213,7 +216,7 @@ class LSGNNSolver:
         batch_size = self.estimate_batch_size(n_clauses)
         batch_graphs = [cnf_data.to_data(random_init=True) for _ in range(batch_size)]
         optimizer = torch.optim.Adam
-        loss = SGATLoss(device=self.device, l1=0, l2=1)
+        loss = SGATLoss(device=self.device)
         trainer = SGATTrainer(
             model=self.model,
             optimizer_cls=optimizer,
@@ -226,11 +229,11 @@ class LSGNNSolver:
             cut_incomplete_batch=False
         )
         self.trainer = trainer
+        self.sum_weights = cnf_data.weights.sum().item()
 
         # Pre-training step
         trainer.pre_training()
 
-        time_start = time.perf_counter()
 
         current_best, final_best, epoch, updated = self._initialize_batch_state(batch_graphs, n_clauses)
 

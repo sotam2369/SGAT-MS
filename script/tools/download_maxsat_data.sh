@@ -145,3 +145,46 @@ prepare_year "maxsat2024" \
   "https://www.cs.helsinki.fi/group/coreo/MSE2024-instances/mse24-exact-weighted.zip|mse24_exact_w.zip" \
   "https://www.cs.helsinki.fi/group/coreo/MSE2024-instances/mse24-anytime-unweighted.zip|mse24_anytime_unw.zip" \
   "https://www.cs.helsinki.fi/group/coreo/MSE2024-instances/mse24-anytime-weighted.zip|mse24_anytime_w.zip"
+
+# After preparing years, move specific MS18 benchmark directories into
+# maxsat2018_sel/unweighted and maxsat2018_sel/weighted if those
+# destination folders do not already exist.
+ms18_src_base="${MAXSAT_DIR}/maxsat2018_sel/maxsat_instances/ms_evals/MS18"
+ms18_dest_base="${MAXSAT_DIR}/maxsat2018_sel"
+
+if [[ -d "${ms18_src_base}" ]]; then
+  # Move unweighted benchmarks if unweighted target doesn't exist yet
+  if [[ ! -d "${ms18_dest_base}/unweighted" ]]; then
+    echo "Creating ${ms18_dest_base}/unweighted and moving MS18 unweighted benchmarks"
+    mkdir -p "${ms18_dest_base}/unweighted"
+    if [[ -d "${ms18_src_base}/mse18-complete-unweighted-benchmarks" ]]; then
+      mv "${ms18_src_base}/mse18-complete-unweighted-benchmarks" "${ms18_dest_base}/unweighted/"
+    fi
+    if [[ -d "${ms18_src_base}/mse18-incomplete-unweighted-benchmarks" ]]; then
+      mv "${ms18_src_base}/mse18-incomplete-unweighted-benchmarks" "${ms18_dest_base}/unweighted/"
+    fi
+  fi
+
+  # Move weighted benchmarks if weighted target doesn't exist yet
+  if [[ ! -d "${ms18_dest_base}/weighted" ]]; then
+    echo "Creating ${ms18_dest_base}/weighted and moving MS18 weighted benchmarks"
+    mkdir -p "${ms18_dest_base}/weighted"
+    if [[ -d "${ms18_src_base}/mse18-complete-weighted-benchmarks" ]]; then
+      mv "${ms18_src_base}/mse18-complete-weighted-benchmarks" "${ms18_dest_base}/weighted/"
+    fi
+    if [[ -d "${ms18_src_base}/mse18-incomplete-weighted-benchmarks" ]]; then
+      mv "${ms18_src_base}/mse18-incomplete-weighted-benchmarks" "${ms18_dest_base}/weighted/"
+    fi
+  fi
+fi
+
+# Generate synthesized MaxSAT instances with G4SATBench SR generator
+# Creates maxsat_synth/ under ${MAXSAT_DIR}
+python "${PROJECT_ROOT}/../G4SATBench/g4satbench/generators/sr.py" "${MAXSAT_DIR}/maxsat_synth/" \
+  --train_instances 1000 \
+  --valid_instances 0 \
+  --test_instances 0 \
+  --min_n 40 \
+  --max_n 200
+
+

@@ -5,6 +5,7 @@ import os
 import random
 import re
 from typing import Any, Dict
+import shutil
 
 import torch
 from tqdm import tqdm
@@ -78,6 +79,12 @@ def get_args() -> argparse.Namespace:
         type=int,
         default=0,
         help="Folder type: 0 for flat directory, 1 for nested directory structure",
+    )
+    parser.add_argument(
+        "--copy-out",
+        type=str,
+        default=None,
+        help="If set and source directory is unweighted, copy selected files into this directory under train/ and valid/",
     )
     return parser.parse_args()
 
@@ -329,6 +336,72 @@ def main() -> None:
             test += fallback[split:]
             print_split_info("fallback", split, len(fallback))
 
+    # If requested, copy the actual selected files into separate train/valid folders
+    # Only apply this when the source directory appears to be the unweighted set
+    # and when a test/train split was requested.
+    if args.copy_out is not None and args.tsplit is not None:
+        src_dir = os.path.normpath(args.directory)
+        copy_root = os.path.normpath(args.copy_out)
+        train_dest = os.path.join(copy_root, "train/unsat")
+        valid_dest = os.path.join(copy_root, "valid/unsat")
+        os.makedirs(train_dest, exist_ok=True)
+        os.makedirs(valid_dest, exist_ok=True)
+
+        def copy_list(file_list, dest_dir):
+            for rel in file_list:
+                src = os.path.join(args.directory, rel)
+                # preserve filename only (flat target)
+                base = os.path.basename(rel)
+                # If source is .wcnf, convert to .cnf by stripping weights
+                if base.lower().endswith('.wcnf'):
+                    dst_name = os.path.splitext(base)[0] + '.cnf'
+                    dst = os.path.join(dest_dir, dst_name)
+                    try:
+                        with open(src, 'r') as fin, open(dst, 'w') as fout:
+                            for line in fin:
+                                # preserve comments and blank lines
+                                if line.startswith('c') or line.strip() == '':
+                                    fout.write(line)
+                                    continue
+                                # convert header 'p wcnf' to 'p cnf'
+                                if line.lstrip().startswith('p wcnf'):
+                                    parts = line.split()
+                                    # parts: ['p', 'wcnf', num_vars, num_clauses, ...]
+                                    if len(parts) >= 4:
+                                        num_vars = parts[2]
+                                        num_clauses = parts[3]
+                                    else:
+                                        num_vars = ''
+                                        num_clauses = ''
+                                    fout.write(f'p cnf {num_vars} {num_clauses}\n')
+                                    continue
+
+                                toks = line.strip().split()
+                                if len(toks) == 0:
+                                    continue
+                                # Expect clause lines ending with '0'. First token is weight -> remove it.
+                                if toks[-1] == '0' and len(toks) >= 2:
+                                    # Remove leading weight if it's an integer
+                                    clause_tokens = toks[1:] if len(toks) > 1 else toks
+                                    # write clause (join tokens and ensure newline)
+                                    fout.write(' '.join(clause_tokens) + '\n')
+                                else:
+                                    # Fallback: write the line as-is
+                                    fout.write(line)
+                    except Exception as e:
+                        print(f"Warning: failed to convert {src} -> {dst}: {e}")
+                else:
+                    dst = os.path.join(dest_dir, base)
+                    try:
+                        shutil.copy2(src, dst)
+                    except Exception as e:
+                        print(f"Warning: failed to copy {src} -> {dst}: {e}")
+
+        print(f"Copying {len(train)} train files to {train_dest}")
+        copy_list(train, train_dest)
+        print(f"Copying {len(test)} valid files to {valid_dest}")
+        copy_list(test, valid_dest)
+    
     if args.dataset_info:
         dataset_info = [[], [], [], [], [], []]
         for cnf_file in tqdm(listdir):

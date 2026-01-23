@@ -30,7 +30,6 @@ class SGATData:
 
         # --- Runtime state ---
         self.formula = None
-        self.optimal = None
         # The following attributes will be set after loading:
         # self.weights, self.ori_weights, self.n_vars, self.n_clauses, etc.
 
@@ -247,9 +246,6 @@ class SGATData:
             "name": self.file_name,
         }
 
-        if self.optimal is not None:
-            data_kwargs["optimal"] = torch.tensor(self.optimal, device=self.device).float()
-
         return Data(**data_kwargs)
     
 
@@ -262,7 +258,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("file_path", type=str, help="Path to the .wcnf file")
     parser.add_argument("--device", type=str, default="cpu", help="Device to use: cpu or cuda")
-    parser.add_argument("--new_format", action="store_true", help="Use new WCNF format")
     parser.add_argument("--verbose", action="store_true", help="Show progress with tqdm")
 
     args = parser.parse_args()
