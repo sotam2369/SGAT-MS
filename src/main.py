@@ -59,6 +59,10 @@ def setSeed(seed):
     np.random.seed(seed)
     random.seed(seed)
 
+def _fmt(value):
+    return f"{value:.6g}"
+
+
 def main(args):
 
     # Set device
@@ -141,7 +145,8 @@ def main(args):
     test_eval_history = []
 
     # Training loop
-    for epoch in tqdm(range(1, args.epochs+1)):
+    pbar = tqdm(range(1, args.epochs + 1), desc="Epochs", ncols=120)
+    for epoch in pbar:
 
         train_loss, train_eval = trainer.train_epoch()
 
@@ -159,27 +164,35 @@ def main(args):
         test_loss_history.append(test_loss_value)
         train_eval_history.append(train_eval_value)
         test_eval_history.append(test_eval_value)
+
+        pbar.set_postfix(
+            tr_loss=_fmt(train_loss_value),
+            te_loss=_fmt(test_loss_value),
+            tr_eval=_fmt(train_eval_value),
+            te_eval=_fmt(test_eval_value),
+        )
         
         if epoch >= 10:
             if work_folder.save_model(model, test_eval.detach().cpu(), epoch):
                 pass
 
             if epoch % args.output_epochs == 0:
-                print()
-                print(f'Epoch: {epoch}')
-                print(f'    Tr Loss: {train_loss_value}')
-                print(f'    Tr Eval: {train_eval_value}')
-                print(f'    Te Loss: {test_loss_value}')
-                print(f'    Te Eval: {test_eval_value}')
-                print(f'    Best: {work_folder.best_model_val.tolist()}, Epoch: {work_folder.best_model_epoch}')
+                pbar.write(f"Epoch {epoch}")
+                pbar.write(f"  Tr Loss: {_fmt(train_loss_value)}")
+                pbar.write(f"  Tr Eval: {_fmt(train_eval_value)}")
+                pbar.write(f"  Te Loss: {_fmt(test_loss_value)}")
+                pbar.write(f"  Te Eval: {_fmt(test_eval_value)}")
+                pbar.write(f"  Best: {work_folder.best_model_val.tolist()}, Epoch: {work_folder.best_model_epoch}")
                 window = min(len(test_eval_history), 10)
                 mean_eval = sum(test_eval_history[-window:]) / window if window else 0.0
-                print(f'    Mean Eval per 10 epochs: {mean_eval}')
+                pbar.write(f"  Mean Eval per 10 epochs: {_fmt(mean_eval)}")
                 
                 if len(test_eval_history) > 20:
                     recent = sum(test_eval_history[-10:])
                     previous = sum(test_eval_history[-20:-10])
-                    print(f'    Difference in Mean Eval per 10 epochs: {(recent - previous)/10}')
+                    pbar.write(
+                        f"  Difference in Mean Eval per 10 epochs: {_fmt((recent - previous) / 10)}"
+                    )
 
                 
                 work_folder.save_plot(
@@ -197,7 +210,7 @@ def main(args):
                 work_folder.save_csv([train_eval_history], [test_eval_history], "eval")
 
                 if epoch - work_folder.best_model_epoch > args.finish_round and args.finish_round != -1:
-                    print("Finishing due to no improvement")
+                    pbar.write("Finishing due to no improvement")
                     break
     
     atexit.unregister(work_folder.exit_handler)
