@@ -22,7 +22,7 @@ run_allow_fail() {
   fi
 }
 
-Experiment for SGATs: run the block with multiple seeds
+# Experiment for SGATs: run the block with multiple seeds
 for seed in 1 2 3; do
   echo "=== Running experiments with seed=$seed ==="
 
